@@ -1,0 +1,43 @@
+name: System Design CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test-python:
+    name: Python Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run Parking Lot Tests
+        run: |
+          cd systems/02-parking-lot/python
+          python -m unittest discover -s . -p "test_*.py"
+      - name: Run URL Shortener Tests
+        run: |
+          python -m unittest systems/01-url-shortener/backend-python/tests/test_shortener.py
+
+  test-go:
+    name: Go Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go 1.21
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+      - name: Run URL Shortener Go Tests
+        run: |
+          cd systems/01-url-shortener/backend-go
+          go test -v ./...
+      - name: Run Parking Lot Go Tests
+        run: |
+          cd systems/02-parking-lot/go
+          go test -v ./...
