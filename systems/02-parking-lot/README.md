@@ -1,10 +1,10 @@
-# 🅿️ System 02: Parking Lot System (Low-Level Design / OOD)
+# System 02: Parking Lot System (Low-Level Design / OOD)
 
 A comprehensive Low-Level Object-Oriented Design (LLD/OOD) implementation of a multi-floor parking lot with thread-safe spot allocation, dynamic fee strategies, and concurrency controls.
 
 ---
 
-## 🎯 1. Requirements
+## 1. Requirements
 
 ### Functional Requirements
 1. **Multi-Floor Capacity**: The parking lot contains multiple floors, each with designated spots.
@@ -19,7 +19,7 @@ A comprehensive Low-Level Object-Oriented Design (LLD/OOD) implementation of a m
 
 ---
 
-## 📐 2. Class Diagram & Architecture
+## 2. Class Diagram & Architecture
 
 ```mermaid
 classDiagram
@@ -68,7 +68,7 @@ classDiagram
 
 ---
 
-## 💡 3. Applied Design Patterns
+## 3. Applied Design Patterns
 
 1. **Strategy Pattern** (`PricingStrategy`):
    - Separates fee computation from the core parking lot engine.

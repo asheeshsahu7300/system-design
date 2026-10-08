@@ -1,10 +1,10 @@
-# 📺 System 06: Hyperscale Video Streaming (YouTube / Disney+ Hotstar)
+# System 06: Hyperscale Video Streaming (YouTube / Disney+ Hotstar)
 
 An architectural deep dive into designing a global video streaming platform supporting billions of on-demand views (YouTube) and 50+ million concurrent live viewers (Hotstar Cricket Live).
 
 ---
 
-## 🎯 1. Requirements
+## 1. Requirements
 
 ### Functional Requirements
 1. **Video Ingestion & Upload**: Creators upload videos in various formats (MP4, MOV, MKV) up to 4K/8K resolution.
@@ -21,7 +21,7 @@ An architectural deep dive into designing a global video streaming platform supp
 
 ---
 
-## 🧮 2. Back-of-the-Envelope Capacity Estimation
+## 2. Back-of-the-Envelope Capacity Estimation
 
 ### YouTube (Video-on-Demand Scale)
 - **Upload Traffic**: 500 hours uploaded/minute $\approx 30,000 \text{ hours/hour} = 720,000 \text{ hours/day}$.
@@ -39,7 +39,7 @@ An architectural deep dive into designing a global video streaming platform supp
 
 ---
 
-## 🏛️ 3. End-to-End System Architecture
+## 3. End-to-End System Architecture
 
 ```mermaid
 flowchart TD
@@ -87,7 +87,7 @@ flowchart TD
 
 ---
 
-## 🔬 4. Critical Engineering Deep Dives
+## 4. Critical Engineering Deep Dives
 
 ### A. Adaptive Bitrate Streaming (ABR) Mechanics
 When a client requests a video, they receive a **Master Manifest** (`master.m3u8`):

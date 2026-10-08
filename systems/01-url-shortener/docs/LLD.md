@@ -1,4 +1,4 @@
-# ⚙️ Low-Level Design (LLD): Distributed URL Shortener
+# Low-Level Design (LLD): Distributed URL Shortener
 
 | Document Version | Status | Target Audience | Primary Focus |
 |---|---|---|---|

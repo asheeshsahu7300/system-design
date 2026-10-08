@@ -1,10 +1,10 @@
-# 🚗 System 07: Real-Time Ride Hailing & Dispatch (Uber / Rapido / Lyft)
+# System 07: Real-Time Ride Hailing & Dispatch (Uber / Rapido / Lyft)
 
 An end-to-end architectural deep dive into geospatial indexing, real-time vehicle tracking, high-frequency dispatch algorithms, and dynamic surge pricing.
 
 ---
 
-## 🎯 1. Requirements
+## 1. Requirements
 
 ### Functional Requirements
 1. **Real-Time Driver Location Ingestion**: Drivers stream their live GPS coordinates $(lat, lng, heading, speed)$ every 3 to 4 seconds.
@@ -21,7 +21,7 @@ An end-to-end architectural deep dive into geospatial indexing, real-time vehicl
 
 ---
 
-## 🧮 2. Back-of-the-Envelope Capacity Estimation
+## 2. Back-of-the-Envelope Capacity Estimation
 
 ### Location Ingestion Throughput
 - **Active Drivers globally**: 1,000,000 drivers online concurrently.
@@ -41,7 +41,7 @@ An end-to-end architectural deep dive into geospatial indexing, real-time vehicl
 
 ---
 
-## 🏛️ 3. Architecture Diagram
+## 3. Architecture Diagram
 
 ```mermaid
 flowchart TD
@@ -95,7 +95,7 @@ flowchart TD
 
 ---
 
-## 🗺️ 4. Geospatial Indexing: Why Uber Built H3
+## 4. Geospatial Indexing: Why Uber Built H3
 
 ### The Dilemma: Why Traditional SQL Fails
 - A simple SQL query:
@@ -115,7 +115,7 @@ flowchart TD
 
 ---
 
-## ⚡ 5. Ride Matching: Greedy vs Batch Optimization
+## 5. Ride Matching: Greedy vs Batch Optimization
 
 1. **Greedy Matching (Naive)**:
    - Assign the closest driver immediately when a request arrives.

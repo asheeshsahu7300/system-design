@@ -1,14 +1,13 @@
-# 🔗 System 01: URL Shortener (TinyURL / Bitly)
+# System 01: URL Shortener (TinyURL / Bitly)
 
-
-> 📖 **Deep-Dive Engineering Specifications**:
-> - 📐 [**High-Level Design (HLD) Specification**](docs/HLD.md) — Capacity planning, global edge CDN, DB sharding, failure modes.
-> - ⚙️ [**Low-Level Design (LLD) Specification**](docs/LLD.md) — UML domain class diagrams, sequence flows, singleflight, SQL/DynamoDB schema.
-> - 📄 [**System Design RFC Document**](docs/SYSTEM_DESIGN_RFC.md) — Production RFC, SLOs/SLIs, security threat modeling, disaster recovery runbooks.
+> **Deep-Dive Engineering Specifications**:
+> - [**High-Level Design (HLD) Specification**](docs/HLD.md) - Capacity planning, global edge CDN, DB sharding, failure modes.
+> - [**Low-Level Design (LLD) Specification**](docs/LLD.md) - UML domain class diagrams, sequence flows, singleflight, SQL/DynamoDB schema.
+> - [**System Design RFC Document**](docs/SYSTEM_DESIGN_RFC.md) - Production RFC, SLOs/SLIs, security threat modeling, disaster recovery runbooks.
 
 ---
 
-## 🎯 1. Requirements
+## 1. Requirements
 
 ### Functional Requirements
 1. **Shorten URL**: Given a long URL (e.g. `https://example.com/very/long/path?param=123`), generate a unique, short alias (e.g. `http://tiny.url/7bX9qZ`).
@@ -18,7 +17,6 @@
 5. **Analytics**: Track click count, referrers, and access timestamps.
 
 ### Non-Functional Requirements
-### Non-Functional Requirements
 1. **High Availability**: 99.99% uptime (links should never fail to resolve).
 2. **Low Latency**: **Internal service lookup P99 < 10ms** (server-side Redis/app resolution time, excluding client-to-edge network transit RTT).
 3. **Read Heavy**: Ratio of reads (redirects) to writes (creations) is **100 : 1**.
@@ -27,7 +25,7 @@
 
 ---
 
-## 🧮 2. Back-of-the-Envelope Capacity Estimation
+## 2. Back-of-the-Envelope Capacity Estimation
 
 ### Traffic Estimation
 - **New URLs created (Writes)**: 100 Million / month $\approx$ 3.3 Million / day.
@@ -52,7 +50,7 @@
 The system receives $\approx 328\text{M redirects/day}$. If 80% of traffic is concentrated on the top 20% hottest URLs:
 $$328\text{M} \times 80\% = 262.4\text{M redirects/day to hot URLs}$$
 
-> ⚠️ **The Mathematical Nuance**: Knowing that the hot set receives $262.4\text{M}$ requests does **not** uniquely determine how many *distinct hot URLs* exist.
+> **The Mathematical Nuance**: Knowing that the hot set receives $262.4\text{M}$ requests does **not** uniquely determine how many *distinct hot URLs* exist.
 
 Depending on the domain distribution:
 | Hot Unique URLs | Avg Redirects per Hot URL / Day | Logical RAM (at ~1 KB/entry) |
@@ -68,7 +66,7 @@ Depending on the domain distribution:
 
 ---
 
-## 🏛️ 3. End-to-End System Architecture
+## 3. End-to-End System Architecture
 
 ```mermaid
 flowchart TD
@@ -116,7 +114,7 @@ flowchart TD
 
 ---
 
-## 🔍 4. Key Design Decisions & Trade-offs
+## 4. Key Design Decisions & Trade-offs
 
 ### A. Namespace Capacity (7 Characters)
 - Character set: `[0-9, a-z, A-Z]` = $10 + 26 + 26 = 62$ characters (**Base62**).
@@ -130,7 +128,7 @@ flowchart TD
    - Requires collision detection on every write, or a massive pre-generated inventory database of unused keys.
 2. **Auto-Incrementing Integer**:
    - Single DB bottleneck and exposes business volume (sequential IDs can be scraped).
-3. **Production Standard (Winner): Distributed Unique ID + Permutation + Base62**:
+3. **Production Standard (Recommended): Distributed Unique ID + Permutation + Base62**:
    $$\text{Twitter Snowflake (64-bit ID)} \longrightarrow \text{Bit Permutation / Feistel Obfuscation} \longrightarrow \text{Base62}$$
    - **Guaranteed Uniqueness**: Snowflake IDs are inherently collision-free across distributed nodes.
    - **Zero Collision Checks**: No database lookups needed during slug generation.
@@ -141,7 +139,7 @@ flowchart TD
 - **HTTP 301 (Moved Permanently)**:
   - The *initial* redirect request hits our service and can be logged.
   - However, browsers and intermediate CDNs cache the redirect aggressively. **Subsequent clicks from that user bypass our infrastructure completely**, leading to severely undercounted analytics.
-- **HTTP 302 Found / 307 Temporary (Winner)**:
+- **HTTP 302 Found / 307 Temporary**:
   - Browser executes the request through our edge on every click.
   - Retains full control to record every click, inspect user-agent/referrer, and revoke compromised or malicious links instantly.
   - *Internal Lookup Latency*: Kept $< 5\text{ms}$ via Edge / Redis cache.
@@ -153,7 +151,7 @@ flowchart TD
 
 ---
 
-## 📂 Implementation Directory Structure
+## 5. Implementation Directory Structure
 
 ```
 01-url-shortener/
@@ -164,4 +162,8 @@ flowchart TD
 │   ├── docker-compose.yml
 │   ├── nginx.conf
 │   └── k8s/
+└── docs/
+    ├── HLD.md
+    ├── LLD.md
+    └── SYSTEM_DESIGN_RFC.md
 ```
