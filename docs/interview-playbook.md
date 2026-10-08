@@ -1,10 +1,10 @@
-# 🎯 The Senior / Staff System Design Interview Playbook
+# Senior / Staff System Design Interview Playbook
 
-How to structure your 45-minute System Design interview to consistently receive "Strong Hire" ratings at top tech companies.
+How to structure a 45-minute System Design interview to demonstrate clear technical depth and communication.
 
 ---
 
-## ⏱️ 1. Pacing & Time Management (45-Minute Breakdown)
+## 1. Pacing & Time Management (45-Minute Breakdown)
 
 | Minutes | Phase | Primary Objective | Key Traps to Avoid |
 |---|---|---|---|
@@ -16,7 +16,7 @@ How to structure your 45-minute System Design interview to consistently receive 
 
 ---
 
-## 🗣️ 2. The Golden Communication Framework: RESHADED
+## 2. Communication Framework: RESHADED
 
 - **R**equirements (Functional & Non-Functional)
 - **E**stimation (Traffic, Storage, Memory, Bandwidth)
@@ -29,16 +29,16 @@ How to structure your 45-minute System Design interview to consistently receive 
 
 ---
 
-## 🚨 3. Top 5 Pitfalls That Disqualify Candidates
+## 3. Top Pitfalls in System Design Rounds
 
 1. **Jumping straight to tools without justification**:
-   - Saying: *"We'll use Cassandra and Kafka"* without justifying why Postgres or RabbitMQ is insufficient.
+   - Saying: *"We will use Cassandra and Kafka"* without justifying why Postgres or RabbitMQ is insufficient.
 2. **Ignoring the Read/Write Ratio**:
    - A 100:1 read-heavy system (URL Shortener) demands aggressive caching and read replicas.
-   - A write-heavy system (Uber GPS stream) demands append-only logs (Kafka/Cassandra) or in-memory write buffers.
+   - A write-heavy system (GPS stream) demands append-only logs (Kafka/Cassandra) or in-memory write buffers.
 3. **Forgetting Distributed Race Conditions**:
-   - When 2 users book the last ticket or park in the last spot simultaneously, how do you prevent double allocation? (Redis distributed locks with Redlock, conditional updates `WHERE version = x`, DB row-level locks).
-4. **Vague Scaling Answers**:
-   - Saying *"We scale horizontally"* without explaining how state is shared or partitioned (Consistent Hashing with virtual nodes).
+   - When 2 users book the last ticket or park in the last spot simultaneously, prevent double allocation with Redis distributed locks (Redlock), conditional updates `WHERE version = x`, or DB row-level locks.
+4. **Vague Scaling Explanations**:
+   - Saying *"We scale horizontally"* without explaining how state is partitioned (Consistent Hashing with virtual nodes).
 5. **Treating Cache as Indestructible**:
    - What happens when Redis restarts or the cache expires? (Cache stampede, Cache breakdown, Cache penetration). Always mention Bloom Filters and Mutex locks for cache misses.

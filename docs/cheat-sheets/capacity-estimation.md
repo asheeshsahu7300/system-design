@@ -1,10 +1,10 @@
-# 📊 Capacity Estimation & Back-of-the-Envelope Math
+# Capacity Estimation & Back-of-the-Envelope Math
 
 In any System Design interview, being able to quickly compute QPS, storage, and memory bandwidth sets senior engineers apart from juniors.
 
 ---
 
-## ⚡ 1. Numbers Every Software Engineer Should Know
+## 1. Numbers Every Software Engineer Should Know
 
 | Metric / Operation | Approximate Latency |
 |--------------------|---------------------|
@@ -21,7 +21,7 @@ In any System Design interview, being able to quickly compute QPS, storage, and 
 
 ---
 
-## 🔢 2. Powers of Two & Storage Prefixes
+## 2. Powers of Two & Storage Prefixes
 
 | Power of 2 | Value | Exact Bytes | Approx | Common Symbol |
 |------------|-------|-------------|--------|---------------|
@@ -33,7 +33,7 @@ In any System Design interview, being able to quickly compute QPS, storage, and 
 
 ---
 
-## 🧮 3. Essential Formulas & Shortcuts
+## 3. Essential Formulas & Shortcuts
 
 ### Seconds in a Day
 $$\text{Seconds in a Day} = 24 \times 60 \times 60 = 86,400 \approx 100,000 \text{ (for fast mental estimation)}$$
@@ -60,7 +60,7 @@ $$\text{5-Year Storage} = 1.65 \text{ GB} \times 365 \times 5 \approx 3 \text{ T
 ---
 
 ### Cache Memory Estimation (80 / 20 Rule & Working Sets)
-> 🚨 **Critical Conceptual Distinction**: The 80/20 rule states that **20% of unique items/URLs** generate **80% of read traffic**. It does **not** mean you cache "20% of reads".
+> **Critical Conceptual Distinction**: The 80/20 rule states that **20% of unique items/URLs** generate **80% of read traffic**. It does **not** mean you cache "20% of reads".
 - **Step 1**: Establish the **active working set of unique items** ($U_{\text{active}}$).
   - *Baseline*: If daily created items ($3.3\text{M}$) approximate the active set:
     $$\text{Hot Unique Items} = 3.3\text{M} \times 0.20 = 660,000 \text{ items}$$
