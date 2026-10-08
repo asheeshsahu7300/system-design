@@ -48,13 +48,23 @@
 - **Total Storage**: $6 \times 10^9 \times 700 \text{ bytes} \approx 4.2 \text{ TB}$ (easily managed on a sharded PostgreSQL or DynamoDB cluster).
 
 ### Memory & Cache Estimation (Active Working Set & 80/20 Rule)
-> ⚠️ **Important Distinction**: The Pareto 80/20 rule applies to **unique active URLs**, not raw read request count.
-- If we assume an active working set of **50 Million unique URLs** accessed in a given rolling window (active campaigns, popular links):
-- Top 20% hot unique URLs generate 80% of all redirect traffic:
-  $$\text{Hot Unique URLs to Cache} = 50,000,000 \times 0.20 = 10,000,000 \text{ unique URLs}$$
-- **Cache RAM Required**:
-  $$10 \times 10^6 \text{ URLs} \times 700 \text{ bytes} \approx 7.0 \text{ GB of RAM}$$
-  *(Even scaling up to 100M active unique URLs, cache requirement is only ~14 GB, comfortably fitting into a modest Redis cluster with `allkeys-lru` eviction).*
+
+The system receives $\approx 328\text{M redirects/day}$. If 80% of traffic is concentrated on the top 20% hottest URLs:
+$$328\text{M} \times 80\% = 262.4\text{M redirects/day to hot URLs}$$
+
+> ⚠️ **The Mathematical Nuance**: Knowing that the hot set receives $262.4\text{M}$ requests does **not** uniquely determine how many *distinct hot URLs* exist.
+
+Depending on the domain distribution:
+| Hot Unique URLs | Avg Redirects per Hot URL / Day | Logical RAM (at ~1 KB/entry) |
+|---:|---:|---:|
+| **100,000** | 2,624 | ~100 MB |
+| **500,000** | 525 | ~500 MB |
+| **660,000** (Baseline 20% of 3.3M daily writes) | 398 | **~660 MB** |
+| **1,000,000** | 262 | ~1.0 GB |
+| **10,000,000** (Multi-week campaign pool) | 26 | ~10.0 GB |
+
+#### Concrete Production Sizing Recommendation:
+> **"Cache approximately 660K hot URLs initially, based on the assumption that 20% of the 3.3M daily active URLs generate 80% of traffic. At ~1 KB per Redis entry (including key, value, and Redis memory overhead), this requires ~660 MB of logical cache capacity. With replication, jemalloc fragmentation, and operational headroom, provision approximately 2–3 GB. In production, the hot-set size should be determined from actual access-frequency data rather than assuming all newly created URLs are active."**
 
 ---
 

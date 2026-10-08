@@ -59,7 +59,14 @@ $$\text{5-Year Storage} = 1.65 \text{ GB} \times 365 \times 5 \approx 3 \text{ T
 
 ---
 
-### Cache Memory Estimation (80 / 20 Rule)
-- Pareto Principle: 20% of the data generates 80% of read traffic.
-- If we want to cache the top 20% of daily reads:
-$$\text{Cache Required} = \text{Daily Read Volume} \times 0.20 \times \text{Object Size}$$
+### Cache Memory Estimation (80 / 20 Rule & Working Sets)
+> 🚨 **Critical Conceptual Distinction**: The 80/20 rule states that **20% of unique items/URLs** generate **80% of read traffic**. It does **not** mean you cache "20% of reads".
+- **Step 1**: Establish the **active working set of unique items** ($U_{\text{active}}$).
+  - *Baseline*: If daily created items ($3.3\text{M}$) approximate the active set:
+    $$\text{Hot Unique Items} = 3.3\text{M} \times 0.20 = 660,000 \text{ items}$$
+- **Step 2**: Calculate logical memory:
+  $$\text{Logical RAM} = \text{Hot Unique Items} \times \text{Size per Entry (incl. Redis overhead)}$$
+  $$660,000 \times 1\text{ KB} \approx 660 \text{ MB}$$
+- **Step 3**: Apply operational headroom factor (Replication + Fragmentation + Spike buffer $\approx 3\times$):
+  $$\text{Provisioned RAM} \approx 2 \text{ to } 3 \text{ GB}$$
+- **Senior Rule**: Never claim you can derive the count of hot unique items from read traffic alone; access-frequency distribution determines the working set size.
