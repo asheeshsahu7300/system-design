@@ -1,4 +1,4 @@
-# 📄 System Design RFC: Production URL Shortener Platform
+# System Design RFC: Production URL Shortener Platform
 
 | Metadata | Value |
 |---|---|
