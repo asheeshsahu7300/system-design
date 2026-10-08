@@ -20,10 +20,10 @@ Modern enterprise platforms, social networks, SMS gateways, and marketing campai
 
 ### 1.3 Non-Functional Requirements
 - **High Availability (HA)**: 99.99% availability ($< 52.6$ minutes downtime/year). The redirection path must never experience downtime.
-- **Ultra-Low Latency**: Read redirection P95 $< 8\text{ms}$, P99 $< 15\text{ms}$.
+- **Ultra-Low Latency**: **Internal service lookup P95 < 5ms, P99 < 10ms** (server-side Redis/app resolution time, distinct from client-to-edge network round-trip time).
 - **Throughput Scalability**: Designed for 100:1 read-to-write ratio at 4,000 read QPS average, bursting up to 25,000 peak QPS.
 - **Strict Uniqueness**: Zero collisions permitted across generated short codes.
-- **Predictability & Security**: Slugs must be non-sequential to prevent crawler scraping and enumeration attacks.
+- **Predictability & Security**: Slugs must be non-sequential (obfuscated) to prevent crawler enumeration.
 
 ### 1.4 Non-Goals (Out of Scope for Core Service)
 - Built-in URL content hosting or deep web caching.
@@ -63,14 +63,17 @@ pie title Read vs Write Distribution (100:1)
   $$\text{Storage Required} = 6 \times 10^9 \times 700 \text{ bytes} \approx 4.2 \text{ Terabytes}$$
   *(Even over 5 years, 4.2 TB easily fits across sharded relational storage or distributed NoSQL).*
 
-### 2.3 Memory & Cache Sizing (80 / 20 Pareto Rule)
-- 20% of generated URLs drive 80% of daily read redirection traffic.
-- Daily read count = $333 \text{ Million reads}$.
-- 20% of daily unique URLs requested:
-  $$333 \text{M} \times 0.20 = 66.6 \text{ Million unique URLs to cache}$$
+### 2.3 Memory & Cache Sizing (Active Working Set & 80/20 Rule)
+> 💡 **Senior Design Note**: A common interview trap is multiplying total reads by 20% (e.g., $333\text{M reads} \times 0.20 = 66.6\text{M}$), which calculates *reads*, not *unique URLs*. Cache memory is sized against the **active catalog of unique URLs**.
+
+- **Active Working Set Assumption**:
+  - At any given time, assume a working set of **50 Million active unique URLs** (created within recent campaign windows or consistently receiving clicks).
+- **80 / 20 Pareto Principle**:
+  - 20% of these active unique URLs account for 80% of all redirect lookups.
+  $$\text{Hot Unique URLs to Cache} = 50,000,000 \times 0.20 = 10,000,000 \text{ unique URLs}$$
 - **Cache RAM Required**:
-  $$\text{RAM} = 66.6 \times 10^6 \times 700 \text{ bytes} \approx 46.6 \text{ GB}$$
-  *(A 3-node Redis cluster with 32 GB RAM per node configured with allkeys-lru eviction comfortably handles this).*
+  $$\text{RAM} = 10,000,000 \times 700 \text{ bytes} \approx 7.0 \text{ GB of RAM}$$
+  *(Even if the active working set expands to 100M unique URLs, cache demand is only ~14 GB, which easily fits within a standard 3-node Redis cluster with `allkeys-lru` eviction).*
 
 ### 2.4 Bandwidth Sizing
 - **Write Ingress**: $120 \text{ writes/sec} \times 700 \text{ bytes} \approx 84 \text{ KB/s}$ (Negligible).
@@ -86,6 +89,7 @@ flowchart TD
     
     subgraph Edge & CDN Tier
         Cloudflare[Cloudflare Edge / Anycast DNS]
+        EdgeCache[(Edge Cache - Hot 302s)]
         EdgeWAF[Edge WAF & Rate Limiter]
     end
 
@@ -93,40 +97,41 @@ flowchart TD
         ALB[Application Load Balancer / Nginx]
     end
 
-    subgraph Stateless Compute Tier
-        API1[App Service #1 - Go/Python]
-        API2[App Service #2 - Go/Python]
-        API3[App Service #3 - Go/Python]
+    subgraph Critical Path: Stateless Compute Tier
+        API1[Redirect Service #1 - Go/Python]
+        API2[Redirect Service #2 - Go/Python]
     end
 
-    subgraph Fast Path: Memory & Caching
+    subgraph Critical Path: Fast Lookups & Data
         Bloom[Distributed Bloom Filter]
-        RedisCluster[(Redis Cluster - Sentinel / Primary-Replica)]
-    end
-
-    subgraph Core Data Tier
+        RedisCluster[(Redis Cluster - LRU Cache)]
         DB_Master[(PostgreSQL Primary - Writes)]
         DB_Replica[(PostgreSQL Read Replicas)]
-        KGS[Key Generation Service / KGS Tokens]
+        IDGen[Snowflake ID + Bit Permutation]
     end
 
-    subgraph Asynchronous Analytics Pipeline
+    subgraph Decoupled Async Path: Analytics
         Kafka[Kafka: url-clicks-topic]
         AnalyticsWorker[Analytics Consumer Workers]
         ClickHouse[(ClickHouse OLAP Database)]
         Grafana[Analytics BI Dashboard]
     end
 
-    Client --> Cloudflare --> EdgeWAF --> ALB
-    ALB --> API1 & API2 & API3
+    Client --> Cloudflare --> EdgeCache
+    EdgeCache -- "HIT (Edge 302)" --> Client
+    EdgeCache -- "MISS" --> EdgeWAF --> ALB
+    ALB --> API1 & API2
 
-    API1 & API2 & API3 <--> Bloom
-    API1 & API2 & API3 <--> RedisCluster
-    API1 & API2 & API3 -->|Writes| DB_Master
-    API1 & API2 & API3 -->|Fallback Reads| DB_Replica
-    API1 & API2 & API3 <--> KGS
+    %% Critical Path (Synchronous, Sub-10ms)
+    API1 & API2 <--> Bloom
+    API1 & API2 <--> RedisCluster
+    API1 & API2 -->|Writes| DB_Master
+    API1 & API2 -->|Fallback Reads| DB_Replica
+    API1 & API2 <--> IDGen
+    API1 & API2 -->|302 Redirect Location| Client
 
-    API1 & API2 & API3 -.->|Async Non-Blocking Click Event| Kafka
+    %% Decoupled Async Path (Zero impact on redirect SLA)
+    API1 & API2 -.->|Non-Blocking Async Event| Kafka
     Kafka --> AnalyticsWorker --> ClickHouse --> Grafana
 ```
 
@@ -134,46 +139,47 @@ flowchart TD
 
 ## 4. Architectural Deep Dives & Trade-Offs
 
-### 4.1 URL Encoding Strategy: Base62 vs Hashing vs KGS
+### 4.1 URL Encoding Strategy: Snowflake + Permutation vs KGS vs MD5
 
 | Strategy | Mechanism | Collision Risk | DB Lookups per Write | Rating |
 |---|---|---|---|:---:|
 | **MD5 / SHA-256 Truncation** | Take `MD5(long_url)`, take first 7 chars. | High (Birthday Paradox). | Requires repeated `SELECT` checks to resolve collisions. | ❌ Suboptimal |
 | **Auto-Increment ID + Base62** | Convert sequential DB `id` to Base62. | Zero collisions. | Single DB write lock; leaks business transaction volume. | ⚠️ Mediocre |
-| **Key Generation Service (KGS)** | Dedicated service pre-generates billions of random Base62 keys offline and distributes them in memory buffers. | **Zero collision risk; no hashing runtime overhead.** | **0 DB queries to discover unique key.** | **🏆 Best in Class** |
+| **Random Key Generation Service (KGS)** | Dedicated service pre-generates random Base62 keys offline and distributes them in memory buffers. | Requires pre-seeded inventory check or deduplication during pre-generation. | 0 DB queries at runtime, but requires inventory maintenance. | ⚠️ Complex |
+| **Distributed Snowflake ID + Bit Permutation + Base62** | 64-bit Snowflake ID $\rightarrow$ Feistel / Bit Permutation $\rightarrow$ Base62 encoding. | **Zero collision risk (mathematically guaranteed).** | **0 DB queries, 0 inventory maintenance, non-sequential.** | **🏆 Best in Class** |
 
-#### Why Base62?
-Characters: `0-9` (10) + `a-z` (26) + `A-Z` (26) = **62 characters**.
-With a 7-character string:
-$$62^7 = 3,521,614,606,208 \approx 3.52 \text{ Trillion unique URLs}$$
-At 100M URLs/month, the 7-character namespace lasts **2,934 years**.
+#### Why Snowflake + Bit Permutation + Base62?
+1. **Uniqueness**: 64-bit Snowflake IDs composed of `(timestamp + worker_id + sequence)` are inherently unique without a central database lock.
+2. **Obfuscation**: Passing the 64-bit integer through a Feistel cipher or pseudo-random bit permutation scatters sequential IDs across the 64-bit integer space. To an external observer, `7bX9qZ` is followed by `K2m9pL`, making enumeration attacks mathematically infeasible.
+3. **Capacity**: $62^7 = 3,521,614,606,208 \approx 3.52 \text{ Trillion unique URLs}$. At 100M URLs/month, 7 characters will last **2,935 years**.
 
 ---
 
-### 4.2 Redirection Status Code: 301 vs 302 Found
+### 4.2 Redirection Status Code: 301 vs 302/307 Nuance
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor User as User Browser
-    participant App as Shortener Service
+    participant Edge as Edge CDN / Shortener
     participant Target as Destination Web Server
 
-    Note over User, App: Scenario: HTTP 302 Temporary Redirect
-    User->>App: GET /7bX9qZ
-    App-->>User: 302 Found (Location: https://example.com)
-    Note right of App: App logs click event asynchronously!
+    Note over User, Edge: Scenario: HTTP 302/307 Temporary Redirect
+    User->>Edge: GET /7bX9qZ
+    Edge-->>User: 302 Found (Location: https://example.com)
+    Note right of Edge: Click logged asynchronously on every visit!
     User->>Target: GET /very/long/path
 ```
 
 - **HTTP 301 Moved Permanently**:
-  - The browser caches the redirect mapping permanently in local disk cache. Subsequent visits bypass our backend completely.
-  - *Advantage*: Zero server load on subsequent clicks.
-  - *Fatal Disadvantage*: **Zero analytics or click tracking.** Inability to deactivate malicious or expired links.
+  - The *initial* redirect request hits our service and can be logged.
+  - However, modern browsers and intermediate CDNs cache 301 responses locally. **Subsequent clicks from that user bypass our infrastructure completely**, leading to severely undercounted analytics.
+  - Revoking or disabling an expired/malicious link is impossible once cached by the client browser.
 - **HTTP 302 Found / 307 Temporary Redirect (Chosen Architecture)**:
-  - Browser executes the request through our edge on every click.
-  - *Advantage*: Complete auditability, accurate real-time click counts, geo-analytics, and revocation control.
-  - *Latency Mitigation*: Response is served in $< 5\text{ms}$ from Redis cache.
+  - The browser is instructed not to permanently cache the route; every subsequent click routes through our infrastructure.
+  - *Full Auditability*: Ensures 100% accurate click counts, referrers, and geolocation tracking.
+  - *Instant Kill-Switch*: Malicious phishing links can be blocked globally within milliseconds.
+  - *Latency Mitigation*: Internal Redis lookup executes in $< 5\text{ms}$, rendering the redirect imperceptible to users.
 
 ---
 

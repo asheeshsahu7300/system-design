@@ -12,15 +12,16 @@
 classDiagram
     class ShortenerController {
         -urlService: URLService
-        -analyticsService: AnalyticsService
+        -analyticsProducer: AnalyticsEventProducer
         +shortenURL(request: ShortenRequest) ShortenResponse
         +redirect(shortCode: string, meta: RequestMetadata) RedirectResponse
         +getAnalytics(shortCode: string) AnalyticsResponse
     }
 
     class URLService {
+        -idGenerator: SnowflakeIDGenerator
+        -permuter: BitPermutationCipher
         -encoder: Base62Encoder
-        -keyGen: KeyGenerationService
         -cache: CacheRepository
         -db: URLRepository
         -bloomFilter: BloomFilter
@@ -28,18 +29,24 @@ classDiagram
         +resolveShortURL(shortCode: string) URLRecord
     }
 
-    class KeyGenerationService {
-        -keyBuffer: Queue~string~
-        -batchSize: int
-        +getNextKey() string
-        -refillBuffer() void
+    class SnowflakeIDGenerator {
+        -datacenterId: int
+        -workerId: int
+        -sequence: int
+        +nextId() uint64
+    }
+
+    class BitPermutationCipher {
+        -feistelRounds: int
+        -secretKey: uint64
+        +permute(id: uint64) uint64
+        +invert(obfuscatedId: uint64) uint64
     }
 
     class Base62Encoder {
         -ALPHABET: string
         +encode(id: uint64) string
         +decode(code: string) uint64
-        +randomSlug(length: int) string
     }
 
     class URLRepository {
@@ -76,12 +83,14 @@ classDiagram
     }
 
     ShortenerController --> URLService
-    URLService --> KeyGenerationService
+    ShortenerController --> AnalyticsEventProducer
+    URLService --> SnowflakeIDGenerator
+    URLService --> BitPermutationCipher
     URLService --> Base62Encoder
     URLService --> URLRepository
     URLService --> CacheRepository
     URLService --> URLRecord
-    AnalyticsEvent --> URLRecord
+    AnalyticsEventProducer ..> AnalyticsEvent
 ```
 
 ---
@@ -96,10 +105,12 @@ sequenceDiagram
     actor Client as API Client / User
     participant Controller as ShortenerController
     participant Service as URLService
-    participant Bloom as BloomFilter
-    participant KGS as KeyGenService
+    participant Snowflake as SnowflakeIDGenerator
+    participant Permuter as BitPermutationCipher
+    participant Encoder as Base62Encoder
     participant DB as PostgreSQL (Primary)
     participant Cache as Redis Cache
+    participant Bloom as BloomFilter
 
     Client->>Controller: POST /api/v1/shorten {url, custom_alias, ttl_days}
     Controller->>Service: createShortURL(...)
@@ -111,13 +122,17 @@ sequenceDiagram
             Service-->>Controller: Throw 409 Conflict Error
             Controller-->>Client: 409 Conflict: Slug already taken
         end
-    else Auto-generate Slug
-        Service->>KGS: getNextKey()
-        KGS-->>Service: "7bX9qZ" (Pre-generated Base62)
+    else Auto-generate Slug (Collision-Free Path)
+        Service->>Snowflake: nextId() -> Unique 64-bit Int
+        Snowflake-->>Service: 154829012398401
+        Service->>Permuter: permute(154829012398401) -> Obfuscated Non-Sequential Int
+        Permuter-->>Service: 902837192837411
+        Service->>Encoder: encode(902837192837411)
+        Encoder-->>Service: "7bX9qZ"
     end
 
     Service->>DB: INSERT INTO urls (short_code, original_url, created_at, expires_at)
-    DB-->>Service: OK (Committed)
+    DB-->>Service: Committed (201)
     
     Service->>Cache: SETEX url:7bX9qZ 86400 (Record JSON)
     Service->>Bloom: Add("7bX9qZ")
@@ -128,39 +143,49 @@ sequenceDiagram
 
 ---
 
-### 2.2 URL Redirection Flow (Read Fast-Path)
+### 2.2 URL Redirection Flow (Critical Path vs Decoupled Async Path)
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor Client as End User Browser
+    participant Edge as Cloudflare Edge CDN / Worker
     participant Controller as RedirectController
     participant Bloom as BloomFilter
     participant Cache as Redis (LRU)
     participant SingleFlight as SingleFlight Mutex
     participant DB as PostgreSQL (Replica)
-    participant Kafka as Kafka Event Stream
+    participant Kafka as Kafka (Decoupled Queue)
 
-    Client->>Controller: GET /{short_code} (e.g. GET /7bX9qZ)
+    Client->>Edge: GET /{short_code} (e.g. GET /7bX9qZ)
     
-    Controller->>Bloom: MightContain("7bX9qZ")?
-    alt Bloom Filter returns False
-        Bloom-->>Controller: Definitely Does NOT Exist
-        Controller-->>Client: 404 Not Found (Instant abort)
-    else Bloom Filter returns True
-        Controller->>Cache: GET url:7bX9qZ
-        alt Cache Hit (98% of requests)
-            Cache-->>Controller: {"original_url": "https://example.com/..."}
-        else Cache Miss
-            Controller->>SingleFlight: Do("7bX9qZ", QueryDB)
-            SingleFlight->>DB: SELECT * FROM urls WHERE short_code = '7bX9qZ'
-            DB-->>SingleFlight: Record Found
-            SingleFlight->>Cache: SETEX url:7bX9qZ 86400 Record
-            SingleFlight-->>Controller: Return Record
-        end
+    alt Edge Cache Hit
+        Edge-->>Client: 302/307 Redirect (Served at Edge in <2ms)
+    else Edge Cache Miss
+        Edge->>Controller: Forward to Origin Load Balancer
         
-        Controller-->>Kafka: Async Publish (ClickEvent) [Non-Blocking]
-        Controller-->>Client: 302 Found (Location: original_url)
+        Controller->>Bloom: MightContain("7bX9qZ")?
+        alt Bloom Filter returns False
+            Bloom-->>Controller: Definitely Not In DB
+            Controller-->>Client: 404 Not Found (Instant abort)
+        else Bloom Filter returns True
+            Controller->>Cache: GET url:7bX9qZ
+            alt Redis Hit (98% of origin traffic)
+                Cache-->>Controller: {"original_url": "https://example.com/..."}
+            else Redis Miss
+                Controller->>SingleFlight: Do("7bX9qZ", QueryDB)
+                SingleFlight->>DB: SELECT * FROM urls WHERE short_code = '7bX9qZ'
+                DB-->>SingleFlight: Record Found
+                SingleFlight->>Cache: SETEX url:7bX9qZ 86400 Record
+                SingleFlight-->>Controller: Return Record
+            end
+            
+            %% CRITICAL PATH RETURNS IMMEDIATELY
+            Controller-->>Client: 302/307 Redirect (Location: original_url)
+            
+            %% ASYNC NON-BLOCKING TELEMETRY (FIRE & FORGET)
+            Controller-)-Kafka: Non-blocking produce (ClickEvent)
+        end
     end
 ```
 
@@ -202,7 +227,36 @@ def decode_base62(code: str) -> int:
 
 ---
 
-### 3.2 SingleFlight Cache Stampede Prevention Pattern
+### 3.2 Non-Sequential Obfuscation (Feistel Cipher / Pseudo-Random Bit Permutation)
+To prevent sequential URL enumeration without requiring collision checks:
+
+```python
+def permute_id(unique_id: int) -> int:
+    """
+    Bijective Feistel permutation on 42-bit integer space.
+    Ensures that unique_id (e.g. 1, 2, 3) maps to pseudo-random integers
+    (e.g. 3829104812, 192847192, 4019283711) with zero collisions.
+    """
+    # Split into two 21-bit halves
+    mask = (1 << 21) - 1
+    left = (unique_id >> 21) & mask
+    right = unique_id & mask
+    
+    # 3-Round Feistel Network
+    ROUND_KEYS = [0x1A2B3C, 0x4D5E6F, 0x7A8B9C]
+    for key in ROUND_KEYS:
+        # Round function
+        f = ((right * 1337 + key) ^ (right >> 5)) & mask
+        new_right = left ^ f
+        left = right
+        right = new_right
+        
+    return (left << 21) | right
+```
+
+---
+
+### 3.3 SingleFlight Cache Stampede Prevention Pattern
 When thousands of concurrent requests arrive for an expired cache entry, `SingleFlight` suppresses redundant queries so only one query hits the database:
 
 ```go

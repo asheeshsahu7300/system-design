@@ -18,11 +18,12 @@
 5. **Analytics**: Track click count, referrers, and access timestamps.
 
 ### Non-Functional Requirements
+### Non-Functional Requirements
 1. **High Availability**: 99.99% uptime (links should never fail to resolve).
-2. **Low Latency**: Redirection should execute in **< 10ms**.
+2. **Low Latency**: **Internal service lookup P99 < 10ms** (server-side Redis/app resolution time, excluding client-to-edge network transit RTT).
 3. **Read Heavy**: Ratio of reads (redirects) to writes (creations) is **100 : 1**.
-4. **Collision Free**: Short codes must be strictly unique.
-5. **Security**: Short URLs should not be easily guessable/sequential to prevent enumeration attacks.
+4. **Collision Free**: Short codes must be mathematically guaranteed unique.
+5. **Security**: Short URLs must be non-sequential (obfuscated) to prevent crawler enumeration.
 
 ---
 
@@ -32,10 +33,10 @@
 - **New URLs created (Writes)**: 100 Million / month $\approx$ 3.3 Million / day.
 - **Write QPS**: $\frac{3,300,000}{86,400} \approx 38 \text{ writes/sec}$ (Peak: ~100 writes/sec).
 - **Read-to-Write Ratio**: $100 : 1$.
-- **Read QPS (Redirects)**: $38 \times 100 \approx 3,800 \text{ reads/sec}$ (Peak: ~10,000 reads/sec).
+- **Read QPS (Redirects)**: $38 \times 100 \approx 3,800 \text{ reads/sec}$ (Peak: ~12,000 reads/sec).
 
 ### Storage Estimation (5 Years)
-- **Record Size**:
+- **Record Size Breakdown**:
   - `short_code`: 7 bytes (VARCHAR)
   - `original_url`: 512 bytes (VARCHAR)
   - `created_at`: 8 bytes (TIMESTAMP)
@@ -44,84 +45,101 @@
   - Overhead & Indexes: ~150 bytes
   - **Total per record**: $\approx 700 \text{ bytes}$.
 - **Total Records in 5 Years**: $100 \text{M/mo} \times 12 \times 5 = 6 \text{ Billion records}$.
-- **Total Storage**: $6 \times 10^9 \times 700 \text{ bytes} \approx 4.2 \text{ TB}$ (manageable on a single sharded PostgreSQL/DynamoDB cluster).
+- **Total Storage**: $6 \times 10^9 \times 700 \text{ bytes} \approx 4.2 \text{ TB}$ (easily managed on a sharded PostgreSQL or DynamoDB cluster).
 
-### Memory & Cache Estimation (80/20 Rule)
-- 20% of the hot URLs account for 80% of daily redirects.
-- Daily redirects: $3,800 \times 86,400 \approx 328 \text{ Million reads/day}$.
-- Top 20% URLs: $328 \text{M} \times 0.20 \approx 65.6 \text{ Million URLs}$.
-- Cache size needed: $65.6 \text{M} \times 700 \text{ bytes} \approx 45.9 \text{ GB}$ of RAM (fits in a standard Redis cluster with LRU eviction).
+### Memory & Cache Estimation (Active Working Set & 80/20 Rule)
+> ⚠️ **Important Distinction**: The Pareto 80/20 rule applies to **unique active URLs**, not raw read request count.
+- If we assume an active working set of **50 Million unique URLs** accessed in a given rolling window (active campaigns, popular links):
+- Top 20% hot unique URLs generate 80% of all redirect traffic:
+  $$\text{Hot Unique URLs to Cache} = 50,000,000 \times 0.20 = 10,000,000 \text{ unique URLs}$$
+- **Cache RAM Required**:
+  $$10 \times 10^6 \text{ URLs} \times 700 \text{ bytes} \approx 7.0 \text{ GB of RAM}$$
+  *(Even scaling up to 100M active unique URLs, cache requirement is only ~14 GB, comfortably fitting into a modest Redis cluster with `allkeys-lru` eviction).*
 
 ---
 
-## 🏛️ 3. Architecture Diagram
+## 🏛️ 3. End-to-End System Architecture
 
 ```mermaid
 flowchart TD
     User([User / Browser])
-    CDN[Cloudflare / Edge CDN]
+    Cloudflare[Cloudflare Edge / Anycast DNS]
+    EdgeCache[(Cloudflare Edge Cache)]
     LB[Load Balancer / Nginx]
     
-    subgraph Application Tier
-        API1[Shortener Service - Go / Python #1]
-        API2[Shortener Service - Go / Python #2]
+    subgraph Compute Tier: Redirect Service
+        API[Redirect Service Instances - Go / Python]
     end
     
-    subgraph Caching Tier
+    subgraph In-Memory Cache Tier
         Redis[(Redis Cluster - LRU Cache)]
-        Bloom[Bloom Filter]
+        Bloom[Distributed Bloom Filter]
     end
     
     subgraph Data Tier
         DB[(Primary DB - PostgreSQL / DynamoDB)]
-        KGS[Key Generation Service / Snowflake]
+        IDGen[Snowflake ID Generator + Bit Permutation]
     end
     
-    subgraph Analytics Tier
-        Kafka[Kafka Event Stream]
-        AnalyticsWorker[Click Analytics Worker]
-        ClickDB[(Clickhouse / TimeSeries DB)]
+    subgraph Asynchronous Decoupled Analytics
+        Kafka[Kafka: click-events topic]
+        Worker[Analytics Ingestion Consumer]
+        ClickDB[(ClickHouse OLAP)]
     end
 
-    User --> CDN
-    CDN --> LB
-    LB --> API1 & API2
-    API1 & API2 <--> Bloom
-    API1 & API2 <--> Redis
-    API1 & API2 <--> DB
-    API1 & API2 --> KGS
-    API1 & API2 -. Async Click Event .-> Kafka
-    Kafka --> AnalyticsWorker --> ClickDB
+    User --> Cloudflare
+    Cloudflare --> EdgeCache
+    EdgeCache -- "HIT (Edge 302)" --> User
+    EdgeCache -- "MISS" --> LB --> API
+
+    %% Critical Path
+    API <--> Bloom
+    API <--> Redis
+    API <--> DB
+    API <--> IDGen
+    API -->|302 Redirect Location| User
+
+    %% Fully Decoupled Async Path (Zero latency impact on redirect)
+    API -. "Async Fire-and-Forget Event" .-> Kafka
+    Kafka --> Worker --> ClickDB
 ```
 
 ---
 
 ## 🔍 4. Key Design Decisions & Trade-offs
 
-### A. How to Generate Short Codes (Length & Alphabet)
-- Using alphanumeric characters: `[a-z, A-Z, 0-9]` = $26 + 26 + 10 = 62$ characters (**Base62**).
-- With **7 characters**: $62^7 = 3,521,614,606,208 \approx 3.5 \text{ Trillion}$ unique URLs.
-- Even at 100M URLs/month, 7 characters will last **2,900 years**!
+### A. Namespace Capacity (7 Characters)
+- Character set: `[0-9, a-z, A-Z]` = $10 + 26 + 26 = 62$ characters (**Base62**).
+- Total Combinations:
+  $$62^7 = 3,521,614,606,208 \approx 3.52 \text{ Trillion}$$
+- At 100 Million new URLs created per month:
+  $$\frac{3.52 \times 10^{12}}{100 \times 10^6} = 35,216 \text{ months} \approx 2,935 \text{ years}$$
 
-### B. MD5 Hash vs Counter + Base62 vs Key Generation Service (KGS)
-1. **MD5 / SHA-256 Truncation**:
-   - Takes `MD5(long_url)`, extracts first 7 characters.
-   - *Problem*: High chance of hash collisions. Resolving collisions requires DB round-trips (`SELECT ...`).
-2. **Auto-Incrementing ID + Base62**:
-   - Take unique integer ID (e.g. `10,000,001`), convert to Base62 string.
-   - *Problem*: Single database auto-increment becomes a bottleneck; sequential IDs leak business volume.
-3. **Key Generation Service (KGS) / Pre-generated Keys (Winner)**:
-   - A standalone service pre-generates random 7-character Base62 keys in batches and stores them in a "used / unused" table.
-   - When a short URL is requested, KGS supplies an already-unique key in $O(1)$ without hashing or lock contention.
+### B. Slug Generation: Snowflake + Bit Permutation vs KGS
+1. **Naive Random Generation / Random KGS**:
+   - Requires collision detection on every write, or a massive pre-generated inventory database of unused keys.
+2. **Auto-Incrementing Integer**:
+   - Single DB bottleneck and exposes business volume (sequential IDs can be scraped).
+3. **Production Standard (Winner): Distributed Unique ID + Permutation + Base62**:
+   $$\text{Twitter Snowflake (64-bit ID)} \longrightarrow \text{Bit Permutation / Feistel Obfuscation} \longrightarrow \text{Base62}$$
+   - **Guaranteed Uniqueness**: Snowflake IDs are inherently collision-free across distributed nodes.
+   - **Zero Collision Checks**: No database lookups needed during slug generation.
+   - **Non-Sequential & Secure**: Feistel cipher / pseudo-random bit permutation scatters sequential IDs into non-contiguous numbers, preventing enumeration attacks.
+   - **No Inventory Overhead**: Zero pre-generated key storage required.
 
-### C. 301 Permanent Redirect vs 302 Found (Temporary Redirect)
-- **301 Permanent Redirect**:
-  - The browser caches the redirect URL locally. Subsequent clicks never touch our servers.
-  - *Pro*: Drastically reduces server load.
-  - *Con*: **Cannot collect analytics or click metrics** because our server is bypassed.
-- **302 Found (Temporary Redirect) (Winner)**:
-  - Every click routes through our server first, allowing us to record clicks, IP, referrer, and user-agent before redirecting.
-  - *Mitigation*: Cache the mapping in Redis so the 302 response takes $< 5\text{ms}$.
+### C. Redirection Status Code: 302/307 vs 301
+- **HTTP 301 (Moved Permanently)**:
+  - The *initial* redirect request hits our service and can be logged.
+  - However, browsers and intermediate CDNs cache the redirect aggressively. **Subsequent clicks from that user bypass our infrastructure completely**, leading to severely undercounted analytics.
+- **HTTP 302 Found / 307 Temporary (Winner)**:
+  - Browser executes the request through our edge on every click.
+  - Retains full control to record every click, inspect user-agent/referrer, and revoke compromised or malicious links instantly.
+  - *Internal Lookup Latency*: Kept $< 5\text{ms}$ via Edge / Redis cache.
+
+### D. Critical Path vs Asynchronous Analytics Decoupling
+- **Critical Path**: Client $\rightarrow$ Edge Cache $\rightarrow$ Redis $\rightarrow$ DB (Resolve `short_code` $\rightarrow$ `original_url` and return 302).
+- **Asynchronous Path**: Background non-blocking push to Kafka/Buffer for analytics processing in ClickHouse.
+- **Guarantee**: Even if Kafka, ClickHouse, or analytics workers crash completely, **redirections continue functioning with zero degradation**.
 
 ---
 

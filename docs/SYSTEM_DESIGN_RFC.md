@@ -18,8 +18,9 @@ This RFC specifies the architecture, operational reliability, security controls,
 
 | Service Level Indicator (SLI) | Target SLO | Measurement Mechanism |
 |---|---|---|
-| **Redirection Latency (P95)** | $\le 8\text{ ms}$ | Edge Load Balancer timer |
-| **Redirection Latency (P99)** | $\le 15\text{ ms}$ | Edge Load Balancer timer |
+| **Internal Service Lookup (P95)** | $\le 5\text{ ms}$ | Application middleware timer (Redis/DB resolution) |
+| **Internal Service Lookup (P99)** | $\le 10\text{ ms}$ | Application middleware timer (Redis/DB resolution) |
+| **Edge-to-Origin Redirect (P99)** | $\le 15\text{ ms}$ | Edge Load Balancer / WAF round-trip timer |
 | **Service Availability** | $\ge 99.99\%$ (Four Nines) | Synthetic uptime probes from 12 global regions |
 | **Write Availability** | $\ge 99.9\%$ (Three Nines) | API Gateway success response ratio |
 | **Cache Hit Ratio** | $\ge 97.5\%$ | Redis Cluster metric (`keyspace_hits / total_calls`) |
@@ -104,3 +105,8 @@ Allows immediate isolation of latency spikes to specific cache misses or slow da
 ### Option 3: Synchronous DB Writes for Analytics
 - *Idea*: Increment DB counter on every redirect request.
 - *Rejected*: Massive write lock contention on the database (`UPDATE urls SET clicks = clicks + 1 WHERE code = ...`). Degrades redirect latency from 5ms to 80ms. Asynchronous Kafka event stream is mandatory.
+
+### Option 4: Pre-Generated Random Key Inventory (Classic KGS)
+- *Idea*: Maintain a separate database table storing billions of pre-generated random 7-character Base62 keys, marking keys as used upon allocation.
+- *Rejected*: Requires managing massive key inventory tables (hundreds of gigabytes), pre-generation deduplication jobs, and transactional locks during worker batch checkout.
+- *Adopted Instead*: **Distributed Snowflake ID $\rightarrow$ Feistel Bit Permutation $\rightarrow$ Base62**. Inherently collision-free across distributed nodes with zero inventory database overhead and guaranteed non-sequential slugs.
