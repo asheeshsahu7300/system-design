@@ -1,31 +1,41 @@
-# System 01: URL Shortener (TinyURL / Bitly)
+# Distributed URL Shortener (TinyURL / Bitly)
 
-> **Deep-Dive Engineering Specifications**:
-> - [**High-Level Design (HLD) Specification**](docs/HLD.md) - Capacity planning, global edge CDN, DB sharding, failure modes.
-> - [**Low-Level Design (LLD) Specification**](docs/LLD.md) - UML domain class diagrams, sequence flows, singleflight, SQL/DynamoDB schema.
-> - [**System Design RFC Document**](docs/SYSTEM_DESIGN_RFC.md) - Production RFC, SLOs/SLIs, security threat modeling, disaster recovery runbooks.
+[![Python: 3.11+](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Go: 1.21+](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go&logoColor=white)](https://golang.org/)
+[![Docker: Ready](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
+Part of the [System Design Roadmap](https://github.com/asheeshsahu7300/system-design). This branch contains the production-oriented, end-to-end implementation of a distributed URL Shortener capable of handling billions of redirects with sub-10ms internal lookup latency.
+
+---
+
+## Technical Specifications
+
+- [High-Level Design (HLD)](docs/HLD.md) - Capacity planning, global edge CDN, DB sharding, failure modes.
+- [Low-Level Design (LLD)](docs/LLD.md) - UML domain class diagrams, sequence flows, SingleFlight stampede guard, SQL/DynamoDB schema.
+- [System Design RFC Document](docs/SYSTEM_DESIGN_RFC.md) - Production RFC, SLOs/SLIs, security threat modeling, disaster recovery runbooks.
 
 ---
 
 ## 1. Requirements
 
 ### Functional Requirements
-1. **Shorten URL**: Given a long URL (e.g. `https://example.com/very/long/path?param=123`), generate a unique, short alias (e.g. `http://tiny.url/7bX9qZ`).
-2. **Redirection**: Accessing the short link redirects the user to the original long URL with minimum latency.
-3. **Custom Aliases (Optional)**: Users can supply a custom slug (e.g. `tiny.url/my-portfolio`).
-4. **Link Expiry (TTL)**: Short links can optionally expire after a defined duration (default: 2 years).
-5. **Analytics**: Track click count, referrers, and access timestamps.
+1. **Shorten URL**: Given a destination URL (up to 2,048 chars), generate a unique short alias (e.g. `https://sho.rt/7bX9qZ`).
+2. **Redirection**: Accessing the short link resolves and redirects the client to the destination with sub-10ms lookup latency.
+3. **Custom Aliases (Optional)**: Support custom vanity slugs (e.g. `sho.rt/my-portfolio`).
+4. **Link Expiry (TTL)**: Optional expiration (default: 2 years).
+5. **Analytics**: Asynchronously capture click counts, referrers, and timestamps.
 
 ### Non-Functional Requirements
-1. **High Availability**: 99.99% uptime (links should never fail to resolve).
+1. **High Availability**: 99.99% uptime for the redirection critical path.
 2. **Low Latency**: **Internal service lookup P99 < 10ms** (server-side Redis/app resolution time, excluding client-to-edge network transit RTT).
 3. **Read Heavy**: Ratio of reads (redirects) to writes (creations) is **100 : 1**.
-4. **Collision Free**: Short codes must be mathematically guaranteed unique.
-5. **Security**: Short URLs must be non-sequential (obfuscated) to prevent crawler enumeration.
+4. **Collision Free**: Short codes are mathematically guaranteed unique.
+5. **Security**: Short URLs are non-sequential (obfuscated) to prevent crawler enumeration.
 
 ---
 
-## 2. Back-of-the-Envelope Capacity Estimation
+## 2. Quantitative Sizing & Math
 
 ### Traffic Estimation
 - **New URLs created (Writes)**: 100 Million / month $\approx$ 3.3 Million / day.
@@ -43,16 +53,15 @@
   - Overhead & Indexes: ~150 bytes
   - **Total per record**: $\approx 700 \text{ bytes}$.
 - **Total Records in 5 Years**: $100 \text{M/mo} \times 12 \times 5 = 6 \text{ Billion records}$.
-- **Total Storage**: $6 \times 10^9 \times 700 \text{ bytes} \approx 4.2 \text{ TB}$ (easily managed on a sharded PostgreSQL or DynamoDB cluster).
+- **Total Storage**: $6 \times 10^9 \times 700 \text{ bytes} \approx 4.2 \text{ TB}$.
 
-### Memory & Cache Estimation (Active Working Set & 80/20 Rule)
+### Memory & Cache Sizing (Active Working Set & 80/20 Rule)
 
 The system receives $\approx 328\text{M redirects/day}$. If 80% of traffic is concentrated on the top 20% hottest URLs:
 $$328\text{M} \times 80\% = 262.4\text{M redirects/day to hot URLs}$$
 
 > **The Mathematical Nuance**: Knowing that the hot set receives $262.4\text{M}$ requests does **not** uniquely determine how many *distinct hot URLs* exist.
 
-Depending on the domain distribution:
 | Hot Unique URLs | Avg Redirects per Hot URL / Day | Logical RAM (at ~1 KB/entry) |
 |---:|---:|---:|
 | **100,000** | 2,624 | ~100 MB |
@@ -61,12 +70,12 @@ Depending on the domain distribution:
 | **1,000,000** | 262 | ~1.0 GB |
 | **10,000,000** (Multi-week campaign pool) | 26 | ~10.0 GB |
 
-#### Concrete Production Sizing Recommendation:
-> **"Cache approximately 660K hot URLs initially, based on the assumption that 20% of the 3.3M daily active URLs generate 80% of traffic. At ~1 KB per Redis entry (including key, value, and Redis memory overhead), this requires ~660 MB of logical cache capacity. With replication, jemalloc fragmentation, and operational headroom, provision approximately 2–3 GB. In production, the hot-set size should be determined from actual access-frequency data rather than assuming all newly created URLs are active."**
+#### Production Sizing Recommendation:
+> **"Cache approximately 660K hot URLs initially, based on the assumption that 20% of the 3.3M daily active URLs generate 80% of traffic. At ~1 KB per Redis entry (including key, value, and Redis memory overhead), this requires ~660 MB of logical cache capacity. With replication, jemalloc fragmentation, and operational headroom, provision approximately 2-3 GB. In production, the hot-set size should be determined from actual access-frequency data rather than assuming all newly created URLs are active."**
 
 ---
 
-## 3. End-to-End System Architecture
+## 3. Architecture
 
 ```mermaid
 flowchart TD
@@ -114,56 +123,81 @@ flowchart TD
 
 ---
 
-## 4. Key Design Decisions & Trade-offs
+## 4. Key Design Decisions
 
 ### A. Namespace Capacity (7 Characters)
-- Character set: `[0-9, a-z, A-Z]` = $10 + 26 + 26 = 62$ characters (**Base62**).
+- Base62 characters: `[0-9, a-z, A-Z]` ($62$ characters).
 - Total Combinations:
   $$62^7 = 3,521,614,606,208 \approx 3.52 \text{ Trillion}$$
-- At 100 Million new URLs created per month:
+- At 100M new URLs created per month:
   $$\frac{3.52 \times 10^{12}}{100 \times 10^6} = 35,216 \text{ months} \approx 2,935 \text{ years}$$
 
 ### B. Slug Generation: Snowflake + Bit Permutation vs KGS
-1. **Naive Random Generation / Random KGS**:
-   - Requires collision detection on every write, or a massive pre-generated inventory database of unused keys.
-2. **Auto-Incrementing Integer**:
-   - Single DB bottleneck and exposes business volume (sequential IDs can be scraped).
-3. **Production Standard (Recommended): Distributed Unique ID + Permutation + Base62**:
-   $$\text{Twitter Snowflake (64-bit ID)} \longrightarrow \text{Bit Permutation / Feistel Obfuscation} \longrightarrow \text{Base62}$$
-   - **Guaranteed Uniqueness**: Snowflake IDs are inherently collision-free across distributed nodes.
-   - **Zero Collision Checks**: No database lookups needed during slug generation.
-   - **Non-Sequential & Secure**: Feistel cipher / pseudo-random bit permutation scatters sequential IDs into non-contiguous numbers, preventing enumeration attacks.
-   - **No Inventory Overhead**: Zero pre-generated key storage required.
+- **Adopted Pattern**:
+  $$\text{Twitter Snowflake (64-bit ID)} \longrightarrow \text{Bit Permutation / Feistel Obfuscation} \longrightarrow \text{Base62}$$
+- **Guaranteed Uniqueness**: Snowflake IDs are inherently collision-free across distributed nodes.
+- **Zero Collision Checks**: No database lookups needed during slug generation.
+- **Non-Sequential & Secure**: Feistel cipher scatters sequential IDs into non-contiguous numbers, preventing enumeration attacks.
+- **No Inventory Overhead**: Zero pre-generated key storage required.
 
 ### C. Redirection Status Code: 302/307 vs 301
-- **HTTP 301 (Moved Permanently)**:
-  - The *initial* redirect request hits our service and can be logged.
-  - However, browsers and intermediate CDNs cache the redirect aggressively. **Subsequent clicks from that user bypass our infrastructure completely**, leading to severely undercounted analytics.
-- **HTTP 302 Found / 307 Temporary**:
-  - Browser executes the request through our edge on every click.
-  - Retains full control to record every click, inspect user-agent/referrer, and revoke compromised or malicious links instantly.
-  - *Internal Lookup Latency*: Kept $< 5\text{ms}$ via Edge / Redis cache.
+- **HTTP 301**: Initial click recorded, but subsequent visits are cached by browsers/CDNs and bypass servers, undercounting analytics.
+- **HTTP 302/307 (Chosen)**: Retains full control to record every click, inspect user-agent/referrer, and revoke compromised links instantly.
 
-### D. Critical Path vs Asynchronous Analytics Decoupling
-- **Critical Path**: Client $\rightarrow$ Edge Cache $\rightarrow$ Redis $\rightarrow$ DB (Resolve `short_code` $\rightarrow$ `original_url` and return 302).
+### D. Critical Path vs Asynchronous Decoupling
+- **Critical Path**: Client -> Edge Cache -> Redis -> DB (Resolve `short_code` -> `original_url` and return 302).
 - **Asynchronous Path**: Background non-blocking push to Kafka/Buffer for analytics processing in ClickHouse.
-- **Guarantee**: Even if Kafka, ClickHouse, or analytics workers crash completely, **redirections continue functioning with zero degradation**.
+- Redirections continue functioning with zero degradation even during Kafka or ClickHouse outages.
 
 ---
 
-## 5. Implementation Directory Structure
+## 5. Repository Structure (This Branch)
 
+```text
+.
+├── README.md                 # System overview and quickstart
+├── .gitignore                # Clean build artifact ignore rules
+├── docs/
+│   ├── HLD.md                # High-Level Design specification
+│   ├── LLD.md                # Low-Level Design specification
+│   └── SYSTEM_DESIGN_RFC.md  # Production RFC and SLOs
+├── backend-python/           # Asynchronous FastAPI service (Base62, Redis, Analytics)
+├── backend-go/               # High-throughput Go net/http service (Goroutine safe)
+├── frontend/                 # Dark glassmorphism dashboard (QR generator, live metrics)
+└── deployment/
+    ├── docker-compose.yml    # Complete stack (Python, Go, Redis, Nginx)
+    ├── nginx.conf            # Reverse proxy configuration
+    └── k8s/                  # Kubernetes Deployment and Service manifests
 ```
-01-url-shortener/
-├── backend-python/       # Asynchronous FastAPI service (Base62, Redis, Analytics)
-├── backend-go/           # High-throughput Go net/http service (Goroutine safe)
-├── frontend/             # Modern dashboard (Dark glassmorphism, QR code, live charts)
-├── deployment/
-│   ├── docker-compose.yml
-│   ├── nginx.conf
-│   └── k8s/
-└── docs/
-    ├── HLD.md
-    ├── LLD.md
-    └── SYSTEM_DESIGN_RFC.md
+
+---
+
+## 6. Quick Start
+
+### Python Service (FastAPI)
+```bash
+cd backend-python
+pip install -r requirements.txt
+python -m uvicorn app.main:app --reload --port 8000
 ```
+Interactive Swagger Documentation: `http://localhost:8000/docs`
+
+### Go Service
+```bash
+cd backend-go
+go run main.go base62.go
+```
+Service runs on port `8080`.
+
+### Full Stack Deployment (Docker Compose)
+```bash
+cd deployment
+docker compose up --build
+```
+This boots the Python API (`:8000`), Go API (`:8080`), Redis Cache (`:6379`), and Nginx Frontend (`:3000`).
+
+---
+
+## Branch Navigation
+
+- [Back to Main Repository Roadmap](https://github.com/asheeshsahu7300/system-design)
