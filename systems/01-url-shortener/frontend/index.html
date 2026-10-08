@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TinyURL Studio | Distributed URL Shortener & Analytics</title>
+  <meta name="description" content="Production-grade URL Shortener dashboard featuring Base62 encoding, sub-10ms redirection, live analytics, and dual Python/Go engine switching.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <!-- QRCode.js for client-side QR generation -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+  <div class="ambient-glow glow-top-left"></div>
+  <div class="ambient-glow glow-bottom-right"></div>
+
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>TinyURL <span>Engine</span></h1>
+          <p class="brand-tag">System Design #01 • Base62 • Sub-10ms Latency</p>
+        </div>
+      </div>
+
+      <!-- Engine Switcher -->
+      <div class="backend-switch">
+        <span class="switch-label">Backend Engine:</span>
+        <div class="segmented-control">
+          <button id="engine-python" class="engine-btn active" onclick="switchEngine('python')">
+            <span class="dot python-dot"></span> Python FastAPI
+          </button>
+          <button id="engine-go" class="engine-btn" onclick="switchEngine('go')">
+            <span class="dot go-dot"></span> Go Gin/HTTP
+          </button>
+        </div>
+        <div id="engine-status" class="status-indicator">
+          <span class="pulse-ring"></span>
+          <span id="status-text">Checking...</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content Grid -->
+    <main class="main-grid">
+      <!-- Shortener Card -->
+      <section class="card glass-card shorten-card">
+        <div class="card-header">
+          <h2>Shorten New URL</h2>
+          <span class="badge">O(1) Lookup</span>
+        </div>
+
+        <form id="shorten-form" onsubmit="handleShorten(event)">
+          <div class="input-group">
+            <label for="long-url">Destination URL</label>
+            <div class="input-wrapper">
+              <svg class="input-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="2" y1="12" x2="22" y2="12"></line>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+              </svg>
+              <input 
+                type="url" 
+                id="long-url" 
+                required 
+                placeholder="https://github.com/google/deepmind/blob/main/research..." 
+                autocomplete="off"
+              />
+            </div>
+          </div>
+
+          <div class="advanced-row">
+            <div class="input-group flex-1">
+              <label for="custom-alias">Custom Alias <span class="optional">(Optional)</span></label>
+              <div class="input-wrapper">
+                <span class="prefix">/</span>
+                <input 
+                  type="text" 
+                  id="custom-alias" 
+                  placeholder="my-portfolio-2026" 
+                  pattern="[a-zA-Z0-9-_]{3,30}"
+                  title="3-30 letters, numbers, hyphens, or underscores"
+                />
+              </div>
+            </div>
+
+            <div class="input-group flex-1">
+              <label for="ttl-select">Expiration / TTL</label>
+              <select id="ttl-select">
+                <option value="730">2 Years (Default)</option>
+                <option value="30">30 Days</option>
+                <option value="7">7 Days</option>
+                <option value="1">24 Hours</option>
+              </select>
+            </div>
+          </div>
+
+          <button type="submit" id="submit-btn" class="btn btn-primary">
+            <span>Generate Short Link</span>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+              <polyline points="12 5 19 12 12 19"></polyline>
+            </svg>
+          </button>
+        </form>
+
+        <!-- Result Box (Hidden by default) -->
+        <div id="result-box" class="result-box hidden">
+          <div class="result-top">
+            <span class="success-label">🎉 URL Shortened Successfully!</span>
+            <span class="algo-tag" id="result-algo">Base62 • 7 Chars</span>
+          </div>
+          <div class="result-link-wrapper">
+            <input type="text" id="short-url-output" readonly />
+            <button class="btn btn-copy" onclick="copyToClipboard()" id="copy-btn">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <span>Copy</span>
+            </button>
+            <a id="test-redirect-link" href="#" target="_blank" class="btn btn-test" title="Test Redirection (302)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                <polyline points="15 3 21 3 21 9"></polyline>
+                <line x1="10" y1="14" x2="21" y2="3"></line>
+              </svg>
+            </a>
+          </div>
+
+          <div class="result-extras">
+            <div id="qrcode-container" class="qrcode-box"></div>
+            <div class="qr-info">
+              <p>Scan with your phone to test immediate 302 redirect & analytics tracking.</p>
+              <button class="btn btn-sm btn-outline" onclick="loadAnalyticsForCurrent()">View Live Analytics</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- System Architecture & Live Metrics Card -->
+      <section class="card glass-card info-card">
+        <div class="card-header">
+          <h2>Architecture Blueprint</h2>
+          <span class="badge badge-accent">Production Spec</span>
+        </div>
+
+        <div class="specs-grid">
+          <div class="spec-tile">
+            <div class="spec-label">Alphabet</div>
+            <div class="spec-value">[0-9, a-z, A-Z]</div>
+            <div class="spec-sub">Base62 (62 characters)</div>
+          </div>
+          <div class="spec-tile">
+            <div class="spec-label">Capacity (7 Chars)</div>
+            <div class="spec-value">3.52 Trillion</div>
+            <div class="spec-sub">62⁷ unique permutations</div>
+          </div>
+          <div class="spec-tile">
+            <div class="spec-label">Redirect Status</div>
+            <div class="spec-value">HTTP 302 Found</div>
+            <div class="spec-sub">Allows click tracking</div>
+          </div>
+          <div class="spec-tile">
+            <div class="spec-label">Caching Tier</div>
+            <div class="spec-value">Redis LRU</div>
+            <div class="spec-sub">Sub-10ms read target</div>
+          </div>
+        </div>
+
+        <div class="recent-section">
+          <div class="recent-header">
+            <h3>Recent Shortened Links</h3>
+            <button class="btn btn-sm btn-ghost" onclick="fetchRecentLinks()">↻ Refresh</button>
+          </div>
+          <div class="table-wrapper">
+            <table class="links-table">
+              <thead>
+                <tr>
+                  <th>Short Code</th>
+                  <th>Original URL</th>
+                  <th>Clicks</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="recent-tbody">
+                <tr>
+                  <td colspan="4" class="empty-state">No links shortened yet in this session.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Analytics Modal -->
+    <div id="analytics-modal" class="modal-backdrop hidden">
+      <div class="modal glass-card">
+        <div class="modal-header">
+          <div>
+            <h3 id="modal-title">Analytics for /code</h3>
+            <p id="modal-orig" class="modal-subtitle">https://example.com</p>
+          </div>
+          <button class="modal-close" onclick="closeAnalyticsModal()">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="metric-big">
+            <span id="modal-clicks" class="metric-num">0</span>
+            <span class="metric-label">Total Clicks Recorded</span>
+          </div>
+
+          <h4>Recent Click Events (Async Kafka Simulation)</h4>
+          <div class="clicks-log" id="modal-log">
+            <p class="empty-log">No clicks recorded yet. Click the test redirect button to generate metrics!</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast hidden">Copied to clipboard!</div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
