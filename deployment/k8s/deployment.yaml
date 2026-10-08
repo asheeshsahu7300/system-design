@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: url-shortener-deployment
+  labels:
+    app: url-shortener
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: url-shortener
+  template:
+    metadata:
+      labels:
+        app: url-shortener
+    spec:
+      containers:
+      - name: shortener-service
+        image: url-shortener:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8000
+        env:
+        - name: REDIS_URL
+          value: "redis://redis-service:6379/0"
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+          requests:
+            cpu: "100m"
+            memory: "64Mi"
+        livenessProbe:
+          httpGet:
+            path: /api/v1/health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /api/v1/health
+            port: 8000
+          initialDelaySeconds: 2
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: url-shortener-service
+spec:
+  type: ClusterIP
+  selector:
+    app: url-shortener
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8000
