@@ -1,6 +1,10 @@
 # 🔗 System 01: URL Shortener (TinyURL / Bitly)
 
-An end-to-end design and implementation of a scalable URL Shortening Service capable of handling billions of redirects with sub-10ms latency.
+
+> 📖 **Deep-Dive Engineering Specifications**:
+> - 📐 [**High-Level Design (HLD) Specification**](docs/HLD.md) — Capacity planning, global edge CDN, DB sharding, failure modes.
+> - ⚙️ [**Low-Level Design (LLD) Specification**](docs/LLD.md) — UML domain class diagrams, sequence flows, singleflight, SQL/DynamoDB schema.
+> - 📄 [**System Design RFC Document**](docs/SYSTEM_DESIGN_RFC.md) — Production RFC, SLOs/SLIs, security threat modeling, disaster recovery runbooks.
 
 ---
 
